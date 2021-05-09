@@ -1,95 +1,57 @@
 import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_selection import chi2
+import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from keras.models import Sequential
-from keras import layers
-from keras.backend import clear_session
-from sklearn.svm import LinearSVC
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.naive_bayes import MultinomialNB
 
 
-filepath_dict = {'brexit' : 'https://kcir.pwr.edu.pl/~witold/ai/ML4_text.txt'}
+def prediction(string):
+    filepath = 'brexit.txt'
 
-df_list = []
-
-for source, filepath in filepath_dict.items():
     df = pd.read_csv(filepath, names=['label', 'sentence'], sep='\t')
-    df['source'] = source
-    df_list.append(df)
 
+    first_column = df.pop('sentence')
+    df.insert(0, 'sentence', first_column)
 
-df = pd.concat(df_list)
+    col = ['sentence', 'label']
+    df = df[col]
+    df = df[pd.notnull(df['label'])]
+    df.columns = ['sentence', 'label']
 
-df_brexit = df[df['source'] == 'brexit']
+    df['category_id'] = df['label'].factorize()[0]
+    category_id_df = df[['label', 'category_id']].drop_duplicates().sort_values('category_id')
+    category_to_id = dict(category_id_df.values)
 
-sentences = df_brexit['sentence'].values
-y = df_brexit['label'].values
+    tfidf = TfidfVectorizer(sublinear_tf=True, min_df=5, norm='l2',
+                        encoding='latin-1', ngram_range=(1, 2), stop_words='english')
 
-sentences_train, sentences_test, y_train, y_test = train_test_split(
-    sentences, y, test_size=0.25, random_state=1000
-)
+    features = tfidf.fit_transform(df.sentence).toarray()
+    labels = df.category_id
 
+    # najczęściej występowane frazy
+    N = 2
+    for label, category_id in sorted(category_to_id.items()):
+        features_chi2 = chi2(features, labels == category_id)
+        indices = np.argsort(features_chi2[0])
+        feature_names = np.array(tfidf.get_feature_names())[indices]
+        unigrams = [v for v in feature_names if len(v.split(' ')) == 1]
+        bigrams = [v for v in feature_names if len(v.split(' ')) == 2]
+        #print("# '{}':".format(label))
+        #print("  . Most correlated unigrams:\n. {}".format('\n. '.join(unigrams[-N:])))
+        #print("  . Most correlated bigrams:\n. {}".format('\n. '.join(bigrams[-N:])))
+        #print('\n ------------------------------- \n')
 
+    X_train, X_test, y_train, y_test = train_test_split(df['sentence'], df['label'], random_state = 0)
+    count_vect = CountVectorizer()
+    X_train_counts = count_vect.fit_transform(X_train)
+    tfidf_transformer = TfidfTransformer()
+    X_train_tfidf = tfidf_transformer.fit_transform(X_train_counts)
+    clf = MultinomialNB().fit(X_train_tfidf, y_train)
 
-vectorizer = CountVectorizer()
-vectorizer.fit(sentences_train)
+    return clf.predict(count_vect.transform(([string])))
 
-X_train = vectorizer.transform(sentences_train)
-X_test = vectorizer.transform(sentences_test)
-
-classifier = LogisticRegression(solver='lbfgs', multi_class='auto', max_iter=10000)
-classifier.fit(X_train, y_train)
-score = classifier.score(X_test, y_test)
-
-print('Accurancy:', score)
-
-
-input_dim = X_train.shape[1]
-
-model = Sequential()
-model.add(layers.Dense(10, input_dim=input_dim, activation='relu'))
-model.add(layers.Dense(1, activation='sigmoid'))
-
-model.compile(loss='binary_crossentropy',
-              optimizer='adam',
-              metrics=['accuracy'])
-
-
-history = model.fit(X_train, y_train, epochs=100, verbose=False, validation_data=(X_test, y_test), batch_size=10)
-
-clear_session()
-
-loss, accurancy = model.evaluate(X_train, y_train, verbose=False)
-print('Training Accurancy: {:.4f}'.format(accurancy))
-
-loss, accuracy = model.evaluate(X_test, y_test, verbose=False)
-print("Testing Accuracy:  {:.4f}".format(accuracy))
-
-
-import matplotlib.pyplot as plt
-plt.style.use('ggplot')
-
-
-def plot_history(history):
-    acc = history.history['accuracy']
-    val_acc = history.history['val_accuracy']
-    loss = history.history['loss']
-    val_loss = history.history['val_loss']
-    x = range(1, len(acc) + 1)
-
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 2, 1)
-    plt.plot(x, acc, 'b', label='Training acc')
-    plt.plot(x, val_acc, 'r', label='Validation acc')
-    plt.title('Training and validation accuracy')
-    plt.legend()
-    plt.subplot(1, 2, 2)
-    plt.plot(x, loss, 'b', label='Training loss')
-    plt.plot(x, val_loss, 'r', label='Validation loss')
-    plt.title('Training and validation loss')
-    plt.legend()
-    plt.show()
-
-plot_history(history)
 
 
